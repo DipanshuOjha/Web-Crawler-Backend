@@ -25,11 +25,41 @@ type CrawlResponse struct {
 	Error      string            `json:"error,omitempty"`
 }
 
+type HealthResponse struct {
+	Status    string `json:"status"`
+	Timestamp string `json:"timestamp"`
+	Uptime    string `json:"uptime,omitempty"`
+}
+
+var startTime = time.Now()
+
 func main() {
 	http.HandleFunc("/api/crawl", enableCORS(crawlHandler))
 
+	http.HandleFunc("/", enableCORS(healthcheck))
+
 	fmt.Println("Starting API server at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func healthcheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	res := HealthResponse{
+		Status:    "healthy",
+		Timestamp: time.Now().Format(time.RFC3339),
+		Uptime:    time.Since(startTime).String(),
+	}
+
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		log.Printf("Error encoding health response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+
 }
 
 func crawlHandler(w http.ResponseWriter, r *http.Request) {
