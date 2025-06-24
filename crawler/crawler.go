@@ -10,8 +10,9 @@ import (
 	"golang.org/x/net/html"
 )
 
-func Crawl(url string, depth int, visited *sync.Map, wg *sync.WaitGroup, linkchan chan<- string, sem chan struct{}, parenturls map[string]string) error {
+func Crawl(url string, depth int, visited *sync.Map, wg *sync.WaitGroup, linkChan chan<- string, sem chan struct{}, parentURLs *sync.Map) error {
 	defer wg.Done()
+	//fmt.Printf("Crawling: %s (depth=%d)\n", url, depth)
 
 	if depth <= 0 {
 		return nil
@@ -21,31 +22,31 @@ func Crawl(url string, depth int, visited *sync.Map, wg *sync.WaitGroup, linkcha
 		return nil
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-
+	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
-
 	if err != nil {
-		return fmt.Errorf("error while creatignn request %s : %v", url, err)
+		fmt.Printf("Request error for %s: %v\n", url, err)
+		return nil // Skip
 	}
 
 	resp, err := client.Do(req)
-
 	if err != nil {
-		return fmt.Errorf("error while fetching detail %s : %s", url, err)
+		fmt.Printf("Fetch error for %s: %v\n", url, err)
+		return nil // Skip
 	}
-
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status check out :- ,%s", resp.Status)
+		fmt.Printf("Bad status for %s: %s\n", url, resp.Status)
+		return nil // Skip
 	}
 
 	doc, err := html.Parse(resp.Body)
-
 	if err != nil {
-		return fmt.Errorf("failed to parse the html page")
+		fmt.Printf("Parse error for %s: %v\n", url, err)
+		return nil // Skip
 	}
+
 	var links []string
 	var node func(n *html.Node, links *[]string)
 	node = func(n *html.Node, links *[]string) {
@@ -55,42 +56,48 @@ func Crawl(url string, depth int, visited *sync.Map, wg *sync.WaitGroup, linkcha
 					link := strings.TrimSpace(attr.Val)
 					if link != "" && (strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://")) {
 						*links = append(*links, link)
+						//fmt.Printf("Found link: %s\n", link)
 					}
 				}
 			}
 		}
-
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			node(c, links)
 		}
 	}
 
 	node(doc, &links)
+	//fmt.Printf("Total links found on %s: %d\n", url, len(links))
 
 	for _, link := range links {
-		linkchan <- link
-		if _, exists := parenturls[link]; !exists {
-			parenturls[link] = url
+		select {
+		case linkChan <- link:
+			parentURLs.Store(link, url)
+		default:
+			//fmt.Printf("linkChan full, skipping link: %s\n", link)
 		}
 	}
 
-	// setting limit till 5
-	if len(links) > 10 {
-		links = links[:10]
-	}
+	// Remove link limit
+	// if len(links) > 10 {
+	// 	links = links[:10]
+	// }
 
 	for _, link := range links {
-
 		if _, loaded := visited.Load(link); !loaded {
-			sem <- struct{}{}
-			wg.Add(1)
-			go func(link string) {
-				Crawl(link, depth-1, visited, wg, linkchan, sem, parenturls)
-				<-sem
-			}(link)
+			select {
+			case sem <- struct{}{}:
+				wg.Add(1)
+				go func(link string) {
+					Crawl(link, depth-1, visited, wg, linkChan, sem, parentURLs)
+					<-sem
+					//fmt.Printf("Finished crawling: %s\n", link)
+				}(link)
+			default:
+				//fmt.Printf("Semaphore full, skipping crawl: %s\n", link)
+			}
 		}
 	}
 
 	return nil
-
 }

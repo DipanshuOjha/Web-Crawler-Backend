@@ -24,94 +24,96 @@ type CrawlResponse struct {
 	Duration   float64           `json:"duration_seconds"`
 	Error      string            `json:"error,omitempty"`
 }
-type HealthResponse struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
-	Uptime    string `json:"uptime,omitempty"`
-}
-
-var startTime = time.Now()
 
 func main() {
-	http.HandleFunc("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	http.HandleFunc("/api/crawl", enableCORS(crawlHandler))
 
-		var req CrawlRqst
+	fmt.Println("Starting API server at http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
 
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
+func crawlHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-		if req.URL == "" || req.Depth < 0 || req.Concurrency < 1 || (req.Output != "console" && req.Output != "sql") {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
-			return
-		}
+	var req CrawlRqst
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
 
-		visited := &sync.Map{}
-		uniqueLinks := &sync.Map{}
-		var wg sync.WaitGroup
-		linkChan := make(chan string, 100)
-		parentURLs := make(map[string]string)
-		sem := make(chan struct{}, req.Concurrency)
+	if req.URL == "" || req.Depth < 0 || req.Concurrency < 1 {
+		sendError(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
 
-		start := time.Now()
-		go func() {
-			defer close(linkChan)
-			wg.Add(1)
-			go crawler.Crawl(req.URL, req.Depth, visited, &wg, linkChan, sem, parentURLs)
-			wg.Wait()
-		}()
+	visited := &sync.Map{}
+	uniqueLinks := &sync.Map{}
+	var wg sync.WaitGroup
+	linkChan := make(chan string, 1000)
+	parentURLs := &sync.Map{}
+	links := []string{}
+	sem := make(chan struct{}, req.Concurrency)
 
-		links := []string{}
+	start := time.Now()
+
+	var collectWg sync.WaitGroup
+	collectWg.Add(1)
+	go func() {
+		defer collectWg.Done()
 		for link := range linkChan {
 			if _, loaded := uniqueLinks.LoadOrStore(link, true); !loaded {
 				links = append(links, link)
 			}
 		}
+	}()
 
-		w.Header().Set("Content-Type", "application/json")
-		resp := CrawlResponse{
-			Links:      links,
-			ParentURLs: parentURLs,
-			Duration:   time.Since(start).Seconds(),
-		}
+	wg.Add(1)
+	go func() {
+		crawler.Crawl(req.URL, req.Depth, visited, &wg, linkChan, sem, parentURLs)
+	}()
 
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			sendError(w, "Internal server error", http.StatusInternalServerError)
-			log.Printf("Error encoding JSON: %v", err)
-		}
+	wg.Wait()
+	close(linkChan)
+	collectWg.Wait()
 
+	parentMap := make(map[string]string)
+	parentURLs.Range(func(key, value interface{}) bool {
+		parentMap[key.(string)] = value.(string)
+		return true
 	})
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-
-		if err := json.NewEncoder(w).Encode(HealthResponse{
-			Status:    "healthy",
-			Timestamp: time.Now().Format(time.RFC3339),
-			Uptime:    time.Since(startTime).String(),
-		}); err != nil {
-			sendError(w, "Internal server error", http.StatusInternalServerError)
-			log.Printf("Error encoding JSON: %v", err)
-		}
-
-	})
-
-	fmt.Println("Starting API server at http://localhost:8080")
-
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	w.Header().Set("Content-Type", "application/json")
+	resp := CrawlResponse{
+		Links:      links,
+		ParentURLs: parentMap,
+		Duration:   time.Since(start).Seconds(),
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		sendError(w, "Internal server error", http.StatusInternalServerError)
+		log.Printf("Error encoding JSON: %v", err)
+	}
 }
 
 func sendError(w http.ResponseWriter, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(CrawlResponse{Error: msg})
+}
+
+func enableCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*") // Allow all origins (adjust for production)
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next(w, r)
+	}
 }
