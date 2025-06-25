@@ -59,7 +59,7 @@ func main() {
 
 	// Register handlers
 	http.HandleFunc("/api/crawl", enableCORS(crawlHandler))
-	http.HandleFunc("/", enableCORS(healthcheck))
+	http.HandleFunc("/health", enableCORS(healthcheck))
 
 	// 3. Add post-bind delay (ensures Render detects the port)
 	fmt.Println("⏳ Waiting for port detection...")
