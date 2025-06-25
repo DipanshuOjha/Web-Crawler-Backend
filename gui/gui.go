@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -38,8 +39,14 @@ func main() {
 
 	http.HandleFunc("/", enableCORS(healthcheck))
 
-	fmt.Println("Starting API server at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("PORT")
+
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Printf("Starting API server at http://localhost:%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func healthcheck(w http.ResponseWriter, r *http.Request) {
