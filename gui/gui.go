@@ -45,8 +45,10 @@ func main() {
 		port = "8080"
 	}
 
-	fmt.Printf("Starting API server at http://localhost:%s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	addr := "0.0.0.0:" + port
+
+	fmt.Printf("Starting API server at %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func healthcheck(w http.ResponseWriter, r *http.Request) {
