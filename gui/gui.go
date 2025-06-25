@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -35,20 +36,38 @@ type HealthResponse struct {
 var startTime = time.Now()
 
 func main() {
-	http.HandleFunc("/api/crawl", enableCORS(crawlHandler))
+	// Initialize with detailed logging
+	fmt.Println("🚀 Initializing server...")
 
-	http.HandleFunc("/", enableCORS(healthcheck))
-
+	// Get port with fallback
 	port := os.Getenv("PORT")
-
 	if port == "" {
 		port = "8080"
 	}
-
 	addr := "0.0.0.0:" + port
+	fmt.Printf("🔌 Attempting to bind to %s\n", addr)
 
-	fmt.Printf("Starting API server at %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	// 1. Add pre-bind delay (helps with container initialization)
+	time.Sleep(2 * time.Second)
+
+	// 2. Explicit port binding with validation
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("❌ Bind failed: %v", err)
+	}
+	fmt.Printf("✅ Successfully bound to %s\n", addr)
+
+	// Register handlers
+	http.HandleFunc("/api/crawl", enableCORS(crawlHandler))
+	http.HandleFunc("/", enableCORS(healthcheck))
+
+	// 3. Add post-bind delay (ensures Render detects the port)
+	fmt.Println("⏳ Waiting for port detection...")
+	time.Sleep(3 * time.Second)
+
+	// Start server with logging
+	fmt.Println("🌐 Server starting...")
+	log.Fatal(http.Serve(ln, nil))
 }
 
 func healthcheck(w http.ResponseWriter, r *http.Request) {
